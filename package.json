@@ -1,0 +1,23 @@
+{
+  "name": "meme-discord-bot",
+  "version": "1.0.0",
+  "description": "Discord bot for meme.com memecoin data",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "register": "tsx src/register.ts"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.3.1",
+    "openai": "^6.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0"
+  }
+}
