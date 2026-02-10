@@ -12,7 +12,7 @@ const openai = new OpenAI({
 // Generate battle image - returns Buffer for Discord attachment
 async function generateBattleImage(winner: string, loser: string, isClose: boolean): Promise<Buffer | null> {
   try {
-    const prompt = `Pixar Inside Out movie animation style: ${winner} character delivering knockout punch to ${loser} character who is flying backwards defeated, smooth rounded 3D animated characters, vibrant glowing colors, expressive cartoon faces, dramatic action moment, cinematic lighting like Pixar film, emotional expressions, no text`;
+    const prompt = `${winner} character delivering knockout punch to ${loser} character flying backwards defeated, dynamic action pose, vibrant colors, dramatic lighting, expressive faces, stylized 3D animation, cinematic quality, no text`;
 
     console.log('Generating battle image...');
 
@@ -44,7 +44,7 @@ async function generateBattleImage(winner: string, loser: string, isClose: boole
 // Generate tie image - returns Buffer for Discord attachment
 async function generateTieImage(meme1: string, meme2: string): Promise<Buffer | null> {
   try {
-    const prompt = `Pixar Inside Out movie animation style: ${meme1} and ${meme2} characters hugging as friends, smooth rounded 3D animated characters, vibrant glowing colors, expressive happy cartoon faces, wholesome friendship moment, cinematic lighting like Pixar film, emotional expressions, no text`;
+    const prompt = `${meme1} character and ${meme2} character standing together as allies after battle, friendship pose, vibrant colors, dramatic lighting, expressive faces, stylized 3D animation, cinematic quality, no text`;
 
     console.log('Generating tie image...');
 
@@ -222,6 +222,89 @@ async function handleHotPredictions(interaction: ChatInputCommandInteraction) {
   }
 }
 
+// Champion handler - find top 3 memecoins
+async function handleChampion(interaction: ChatInputCommandInteraction) {
+  await interaction.deferReply();
+
+  try {
+    // Fetch all coins by market cap
+    const allCoins = await api.getCoinsLeaderboard(1, 300, 'MARKET_CAPITALIZATION');
+
+    const eligibleCoins = allCoins.items;
+
+    if (eligibleCoins.length === 0) {
+      await interaction.editReply(':trophy: No coins found.');
+      return;
+    }
+
+    // Score each coin based on rank in each category
+    // Higher rank = more points (1st place gets N points, last gets 1)
+    const n = eligibleCoins.length;
+
+    const scored = eligibleCoins.map(coin => ({
+      coin,
+      momentum24h: coin.trend_24h ?? -Infinity,
+      trend7d: coin.trend_7d ?? -Infinity,
+      marketCap: coin.market_capitalization ?? 0,
+      diamondRating: coin.diamond_rating ?? 0,
+    }));
+
+    // Sort and assign rank-based points for each category
+    const byMomentum = [...scored].sort((a, b) => b.momentum24h - a.momentum24h);
+    const byTrend = [...scored].sort((a, b) => b.trend7d - a.trend7d);
+    const byMcap = [...scored].sort((a, b) => b.marketCap - a.marketCap);
+    const byDiamond = [...scored].sort((a, b) => b.diamondRating - a.diamondRating);
+
+    const points = new Map<number, number>();
+
+    const assignRankPoints = (sorted: typeof scored, weight = 1) => {
+      sorted.forEach((item, idx) => {
+        const pts = (n - idx) * weight; // 1st gets n*weight points, 2nd gets (n-1)*weight, etc.
+        const current = points.get(item.coin.id) ?? 0;
+        points.set(item.coin.id, current + pts);
+      });
+    };
+
+    assignRankPoints(byMomentum, 1);    // 24h: 1x weight
+    assignRankPoints(byTrend, 2);       // 7d: 2x weight
+    assignRankPoints(byMcap, 1);        // MCap: 1x weight
+    assignRankPoints(byDiamond, 1);     // Diamond Rating: 1x weight
+
+    // Sort by total points
+    const ranked = scored
+      .map(s => ({ ...s, totalPoints: points.get(s.coin.id) ?? 0 }))
+      .sort((a, b) => b.totalPoints - a.totalPoints)
+      .slice(0, 3);
+
+    const medals = [':first_place:', ':second_place:', ':third_place:'];
+
+    const lines = ranked.map((r, i) => {
+      const coin = r.coin;
+      const momentum = r.momentum24h !== -Infinity ? `${r.momentum24h >= 0 ? '+' : ''}${r.momentum24h.toFixed(1)}%` : 'N/A';
+      const trend = r.trend7d !== -Infinity ? `${r.trend7d >= 0 ? '+' : ''}${r.trend7d.toFixed(1)}%` : 'N/A';
+      const mcap = formatMarketCap(r.marketCap);
+
+      return `${medals[i]} **${coin.name}** (${coin.symbol})\n24h: ${momentum} | 7d: ${trend} | MCap: ${mcap}\nBattle Score: ${r.totalPoints} pts`;
+    });
+
+    const embed = new EmbedBuilder()
+      .setTitle(':trophy: Memecoin Champions')
+      .setDescription(lines.join('\n\n'))
+      .setColor(0xFFD700)
+      .setFooter({ text: `Based on ${eligibleCoins.length} coins` })
+      .setTimestamp();
+
+    if (ranked[0]?.coin.coin_image_url) {
+      embed.setThumbnail(ranked[0].coin.coin_image_url);
+    }
+
+    await interaction.editReply({ embeds: [embed] });
+  } catch (error) {
+    console.error('Error in /champion:', error);
+    await interaction.editReply(':x: Failed to find champions. Please try again.');
+  }
+}
+
 // Battle handler
 async function handleBattle(interaction: ChatInputCommandInteraction) {
   await interaction.deferReply();
@@ -256,13 +339,15 @@ async function handleBattle(interaction: ChatInputCommandInteraction) {
         stat2: coin2.trend_24h ?? 0,
         format: (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`,
         higherWins: true,
+        points: 1,
       },
       {
-        name: ':chart_with_upwards_trend: Weekly (7d)',
+        name: ':chart_with_upwards_trend: Weekly (7d) ×2',
         stat1: coin1.trend_7d ?? 0,
         stat2: coin2.trend_7d ?? 0,
         format: (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`,
         higherWins: true,
+        points: 2,
       },
       {
         name: ':muscle: Strength (MCap)',
@@ -270,20 +355,15 @@ async function handleBattle(interaction: ChatInputCommandInteraction) {
         stat2: coin2.market_capitalization ?? 0,
         format: (v: number) => formatMarketCap(v),
         higherWins: true,
+        points: 1,
       },
       {
         name: ':gem: Diamond Rating',
         stat1: coin1.diamond_rating ?? 0,
         stat2: coin2.diamond_rating ?? 0,
-        format: (v: number) => `${v.toFixed(1)}%`,
+        format: (v: number) => v > 0 ? `${v.toFixed(1)}` : 'N/A',
         higherWins: true,
-      },
-      {
-        name: ':bar_chart: Volume (7d)',
-        stat1: coin1.volume_7d ?? 0,
-        stat2: coin2.volume_7d ?? 0,
-        format: (v: number) => formatMarketCap(v),
-        higherWins: true,
+        points: 1,
       },
     ];
 
@@ -296,11 +376,11 @@ async function handleBattle(interaction: ChatInputCommandInteraction) {
       if (b.stat1 === b.stat2) {
         winner = ':handshake: TIE';
       } else if ((b.higherWins && b.stat1 > b.stat2) || (!b.higherWins && b.stat1 < b.stat2)) {
-        winner = `**${coin1.symbol}** :trophy:`;
-        score1++;
+        winner = `**${coin1.symbol}** :trophy:${b.points > 1 ? ` (+${b.points})` : ''}`;
+        score1 += b.points;
       } else {
-        winner = `:trophy: **${coin2.symbol}**`;
-        score2++;
+        winner = `:trophy: **${coin2.symbol}**${b.points > 1 ? ` (+${b.points})` : ''}`;
+        score2 += b.points;
       }
       lines.push(`${b.name}\n${coin1.symbol}: ${b.format(b.stat1)} vs ${coin2.symbol}: ${b.format(b.stat2)}\n→ ${winner}`);
     }
@@ -355,8 +435,10 @@ async function handleBattle(interaction: ChatInputCommandInteraction) {
       .setColor(score1 > score2 ? 0x00ff00 : score2 > score1 ? 0xff6b35 : 0xffff00)
       .setTimestamp();
 
-    if (coin1.coin_image_url) {
-      embed.setThumbnail(coin1.coin_image_url);
+    // Show winner's image (or coin1 if tie)
+    const winnerCoin = score1 > score2 ? coin1 : score2 > score1 ? coin2 : coin1;
+    if (winnerCoin.coin_image_url) {
+      embed.setThumbnail(winnerCoin.coin_image_url);
     }
 
     // Send initial result
@@ -430,6 +512,8 @@ client.on('interactionCreate', async (interaction) => {
       await handleHotPredictions(interaction);
     } else if (commandName === 'battle') {
       await handleBattle(interaction);
+    } else if (commandName === 'champion') {
+      await handleChampion(interaction);
     }
   } catch (error) {
     console.error(`Error handling /${commandName}:`, error);

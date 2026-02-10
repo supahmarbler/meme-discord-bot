@@ -30,4 +30,8 @@ export const commands = [
         .setDescription('Second coin (e.g., DOGE)')
         .setRequired(true)
     ),
+
+  new SlashCommandBuilder()
+    .setName('champion')
+    .setDescription('Find the top 3 memecoins based on battle metrics'),
 ];
