@@ -89,13 +89,6 @@ export const commands = [
         .setName('coin')
         .setDescription('The memecoin you want to race with')
         .setRequired(true)
-    )
-    .addIntegerOption((option) =>
-      option
-        .setName('wager')
-        .setDescription('Memescore to wager (optional, 1000-100000)')
-        .setMinValue(1000)
-        .setMaxValue(100000)
     ),
 
   new SlashCommandBuilder()
@@ -105,4 +98,126 @@ export const commands = [
   new SlashCommandBuilder()
     .setName('balance')
     .setDescription('Check your linked Memescore balance'),
+
+  new SlashCommandBuilder()
+    .setName('tip')
+    .setDescription('Tip memescore to another user')
+    .addUserOption((option) =>
+      option
+        .setName('user')
+        .setDescription('User to tip')
+        .setRequired(true)
+    )
+    .addIntegerOption((option) =>
+      option
+        .setName('amount')
+        .setDescription('Amount to tip')
+        .setRequired(true)
+        .setMinValue(1)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('trends')
+    .setDescription('Discover trending memes via Google Trends'),
+
+  new SlashCommandBuilder()
+    .setName('trendstatus')
+    .setDescription('Check the active trends battle scores'),
+
+  new SlashCommandBuilder()
+    .setName('createmarket')
+    .setDescription('Create a Trends battle market (team channels only)')
+    .addStringOption((option) =>
+      option
+        .setName('meme_a')
+        .setDescription('First meme (e.g. Gigachad)')
+        .setRequired(true)
+    )
+    .addStringOption((option) =>
+      option
+        .setName('meme_b')
+        .setDescription('Second meme (e.g. Wojak)')
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('createprediction')
+    .setDescription('Create a custom YES/NO prediction market (team channels only)')
+    .addStringOption((option) =>
+      option
+        .setName('title')
+        .setDescription('Market question (e.g. "Will BTC hit 100k by June?")')
+        .setRequired(true)
+    )
+    .addStringOption((option) =>
+      option
+        .setName('image_url')
+        .setDescription('Image URL for the market card')
+        .setRequired(true)
+    )
+    .addStringOption((option) =>
+      option
+        .setName('end_date')
+        .setDescription('End date: ISO (2026-03-15) or relative (3d, 7d, 2w)')
+        .setRequired(true)
+    )
+    .addStringOption((option) =>
+      option
+        .setName('description')
+        .setDescription('Optional description for the market')
+        .setRequired(false)
+    )
+    .addIntegerOption((option) =>
+      option
+        .setName('liquidity')
+        .setDescription('Base liquidity (default: 100000)')
+        .setRequired(false)
+        .setMinValue(1000)
+    )
+    .addStringOption((option) =>
+      option
+        .setName('label_yes')
+        .setDescription('Custom YES label (default: YES)')
+        .setRequired(false)
+    )
+    .addStringOption((option) =>
+      option
+        .setName('label_no')
+        .setDescription('Custom NO label (default: NO)')
+        .setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('resolveprediction')
+    .setDescription('Resolve a custom prediction market (team channels only)')
+    .addStringOption((option) =>
+      option
+        .setName('market_id')
+        .setDescription('Market ID (e.g. CUSTOM-will-btc-hit-100k-1)')
+        .setRequired(true)
+    )
+    .addStringOption((option) =>
+      option
+        .setName('outcome')
+        .setDescription('Market outcome')
+        .setRequired(true)
+        .addChoices(
+          { name: 'YES', value: 'YES' },
+          { name: 'NO', value: 'NO' },
+        )
+    ),
+
+  new SlashCommandBuilder()
+    .setName('analytics')
+    .setDescription('Get wiki analytics digest or pipeline health')
+    .addStringOption((option) =>
+      option
+        .setName('type')
+        .setDescription('Type of report')
+        .setRequired(false)
+        .addChoices(
+          { name: 'Weekly Digest', value: 'digest' },
+          { name: 'Daily Health', value: 'health' },
+        )
+    ),
 ];
