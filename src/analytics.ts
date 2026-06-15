@@ -81,11 +81,43 @@ interface PipelineHealth {
   message: string;
 }
 
+interface TopPage {
+  path: string;
+  slug: string;
+  page_views: number;
+  sessions: number;
+}
+
+interface TopSiteSearch {
+  query: string;
+  search_count: number;
+  avg_results: number;
+}
+
+interface TopGoogleQuery {
+  query: string;
+  clicks: number;
+  impressions: number;
+  ctr_pct: number;
+  position: number;
+}
+
+interface DailyInsights {
+  date: string;
+  generated_at: string;
+  top_pages: TopPage[];
+  top_site_searches: TopSiteSearch[];
+  top_google_queries: TopGoogleQuery[];
+  total_sessions_yesterday: number;
+  total_page_views_yesterday: number;
+}
+
 // ── State persistence ───────────────────────────────────────────────────────
 
 interface AnalyticsState {
   lastDigestDate: string | null;
   lastHealthDate: string | null;
+  lastInsightsDate: string | null;
 }
 
 const DATA_DIR = join(process.cwd(), 'data');
@@ -94,12 +126,13 @@ const STATE_FILE = join(DATA_DIR, 'analytics-state.json');
 function loadState(): AnalyticsState {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
   if (!existsSync(STATE_FILE)) {
-    return { lastDigestDate: null, lastHealthDate: null };
+    return { lastDigestDate: null, lastHealthDate: null, lastInsightsDate: null };
   }
   try {
-    return JSON.parse(readFileSync(STATE_FILE, 'utf-8'));
+    const state = JSON.parse(readFileSync(STATE_FILE, 'utf-8'));
+    return { lastInsightsDate: null, ...state }; // Ensure new field exists
   } catch {
-    return { lastDigestDate: null, lastHealthDate: null };
+    return { lastDigestDate: null, lastHealthDate: null, lastInsightsDate: null };
   }
 }
 
@@ -119,6 +152,7 @@ interface CacheEntry<T> {
 
 let digestCache: CacheEntry<AnalyticsDigest> | null = null;
 let healthCache: CacheEntry<PipelineHealth> | null = null;
+let insightsCache: CacheEntry<DailyInsights> | null = null;
 
 function isCacheValid<T>(cache: CacheEntry<T> | null): cache is CacheEntry<T> {
   return cache !== null && Date.now() - cache.timestamp < CACHE_TTL_MS;
@@ -160,6 +194,25 @@ export async function fetchHealth(useCache = true): Promise<PipelineHealth | nul
     return res.data;
   } catch (err: any) {
     console.error('[Analytics] Failed to fetch health:', err.message);
+    return null;
+  }
+}
+
+export async function fetchDailyInsights(useCache = true): Promise<DailyInsights | null> {
+  if (useCache && isCacheValid(insightsCache)) {
+    return insightsCache.data;
+  }
+
+  if (!ADMIN_TOKEN) {
+    console.error('[Analytics] MEME_API_ADMIN_TOKEN not configured');
+    return null;
+  }
+  try {
+    const res = await api().get('/admin/analytics/daily-insights');
+    insightsCache = { data: res.data, timestamp: Date.now() };
+    return res.data;
+  } catch (err: any) {
+    console.error('[Analytics] Failed to fetch daily insights:', err.message);
     return null;
   }
 }
@@ -269,6 +322,57 @@ export function buildHealthMessage(health: PipelineHealth): string {
   return `${emoji} ${health.message}`;
 }
 
+export function buildDailyInsightsEmbed(insights: DailyInsights): EmbedBuilder {
+  const insightDate = new Date(insights.date).toLocaleDateString('en-US', {
+    weekday: 'long', month: 'short', day: 'numeric',
+  });
+
+  // Top pages - show top 5
+  const topPagesText = insights.top_pages.slice(0, 5)
+    .map((p, i) => `${i + 1}. **${p.slug}** — ${formatNumber(p.page_views)} views`)
+    .join('\n') || '_No data_';
+
+  // Top site searches - show top 5
+  const topSearchesText = insights.top_site_searches.slice(0, 5)
+    .map((s, i) => {
+      const gap = s.avg_results < 1 ? ' 🔴' : s.avg_results < 3 ? ' 🟡' : '';
+      return `${i + 1}. **${s.query}** — ${s.search_count}x${gap}`;
+    })
+    .join('\n') || '_No searches_';
+
+  // Top Google queries - show top 5
+  const topQueriesText = insights.top_google_queries.slice(0, 5)
+    .map((q, i) => `${i + 1}. **${q.query}** — ${q.clicks} clicks`)
+    .join('\n') || '_No data_';
+
+  return new EmbedBuilder()
+    .setTitle(`📈 Daily Insights — ${insightDate}`)
+    .setColor(0x00D166)
+    .setDescription(
+      `**${formatNumber(insights.total_sessions_yesterday)}** sessions • ` +
+      `**${formatNumber(insights.total_page_views_yesterday)}** page views`
+    )
+    .addFields(
+      {
+        name: '🔥 Top Articles',
+        value: topPagesText,
+        inline: true,
+      },
+      {
+        name: '🔍 Site Searches',
+        value: topSearchesText,
+        inline: true,
+      },
+      {
+        name: '🌐 Google Queries',
+        value: topQueriesText,
+        inline: false,
+      },
+    )
+    .setFooter({ text: '🔴 = content gap (0 results) • 🟡 = weak coverage (<3 results)' })
+    .setTimestamp(new Date(insights.generated_at));
+}
+
 // ── Scheduling helpers ──────────────────────────────────────────────────────
 
 function getTodayUTC(): string {
@@ -357,15 +461,20 @@ async function postDailyHealth(client: Client): Promise<void> {
   const today = getTodayUTC();
 
   // Check if already posted today
-  if (state.lastHealthDate === today) {
-    console.log('[Analytics] Daily health already posted today, skipping');
+  if (state.lastHealthDate === today && state.lastInsightsDate === today) {
+    console.log('[Analytics] Daily health + insights already posted today, skipping');
     scheduleDailyHealth(client);
     return;
   }
 
-  console.log('[Analytics] Posting daily health...');
+  console.log('[Analytics] Posting daily health + insights...');
 
-  const health = await fetchHealth(false); // Bypass cache for scheduled posts
+  // Fetch both health and insights in parallel
+  const [health, insights] = await Promise.all([
+    fetchHealth(false),
+    fetchDailyInsights(false),
+  ]);
+
   if (!health) {
     console.error('[Analytics] Could not fetch health, will retry tomorrow');
     scheduleDailyHealth(client);
@@ -380,12 +489,22 @@ async function postDailyHealth(client: Client): Promise<void> {
   }
 
   try {
-    const message = buildHealthMessage(health);
-    await channel.send(message);
-
+    // Post health status line
+    const healthMessage = buildHealthMessage(health);
+    await channel.send(healthMessage);
     state.lastHealthDate = today;
+
+    // Post insights embed if available
+    if (insights) {
+      const insightsEmbed = buildDailyInsightsEmbed(insights);
+      await channel.send({ embeds: [insightsEmbed] });
+      state.lastInsightsDate = today;
+      console.log('[Analytics] Daily health + insights posted successfully');
+    } else {
+      console.log('[Analytics] Daily health posted (insights unavailable)');
+    }
+
     saveState(state);
-    console.log('[Analytics] Daily health posted successfully');
   } catch (err: any) {
     console.error('[Analytics] Failed to post health:', err.message);
   }
@@ -493,4 +612,15 @@ export async function getHealthForCommand(): Promise<string> {
     return '❌ Could not fetch pipeline health. Check API configuration.';
   }
   return buildHealthMessage(health);
+}
+
+/**
+ * Fetch and return daily insights for slash command (on-demand).
+ */
+export async function getInsightsForCommand(): Promise<EmbedBuilder | string> {
+  const insights = await fetchDailyInsights();
+  if (!insights) {
+    return '❌ Could not fetch daily insights. Check API configuration.';
+  }
+  return buildDailyInsightsEmbed(insights);
 }
